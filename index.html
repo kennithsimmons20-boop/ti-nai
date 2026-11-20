@@ -381,7 +381,7 @@ async function saveNotes(text) {
   try { await nsp.deleteFile(NOTES); } catch (e) { nsp.connected = false; }
   await nsp.writeFile(NOTES, doc);
 }
-let bridgeOn = false;
+let bridgeOn = false, loopId = 0;
 try { $('apiKey').value = localStorage.getItem('gemKey') || ''; } catch (e) {}
 async function askGemini(prompt) {
   const key = $('apiKey').value.trim(), model = $('model').value.trim();
@@ -400,7 +400,8 @@ async function askGemini(prompt) {
   return (text || 'No answer.').replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[*#`]/g, '').replace(/[^\x20-\x7E\n]/g, '?').slice(0, 1500);
 }
 async function bridgeLoop() {
-  while (bridgeOn && nsp) {
+  const myId = ++loopId;
+  while (bridgeOn && nsp && myId === loopId) {
     try {
       let bytes = null;
       try { bytes = await nsp.readFile(PROMPT); } catch (e) { if (!/not found/.test(e.message)) throw e; }
@@ -413,12 +414,12 @@ async function bridgeLoop() {
           try { await saveNotes('Q: ' + prompt + '\n\nA: ' + ans); log('Notes document updated', 'ok'); }
           catch (e) { log('Notes document failed: ' + e.message, 'bad'); nsp.connected = false; }
           try { await nsp.deleteFile(REPLY); } catch (e) { nsp.connected = false; }
-          await nsp.writeFile(REPLY, enc.encode(ans));
+          await nsp.writeFile(REPLY, enc.encode(ans.length + '\n' + ans));
           log('Answer sent (' + ans.length + ' characters)', 'ok');
         }
       }
     } catch (e) { log('Bridge error: ' + e.message, 'bad'); if (nsp) nsp.connected = false; await sleep(3000); }
-    await sleep(1500);
+    await sleep(2000);
   }
 }
 $('bridge').onclick = () => {
