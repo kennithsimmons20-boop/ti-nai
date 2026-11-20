@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nspire link test, stage 2</title>
+<title>Nspire Gemini bridge</title>
 <style>
   :root { --bg:#f6f7f4; --fg:#1d2320; --muted:#5d6762; --line:#cfd5d0; --ok:#16794a; --bad:#b3261e; --btn:#1d2320; --btnfg:#f6f7f4; --log:#ecefe9; }
   @media (prefers-color-scheme: dark) {
@@ -27,7 +27,7 @@
 </head>
 <body>
 <main>
-  <h1>Nspire link test, stage 2</h1>
+  <h1>Nspire Gemini bridge</h1>
   <p>Plug in the calculator, turn it on, and stay on the home screen. Connect first, then try the other buttons one at a time.</p>
   <p id="status">Not connected</p>
   <div class="row">
@@ -49,6 +49,15 @@
     <button id="write" class="alt" disabled>Write file</button>
     <button id="diag" class="alt" disabled>Run write diagnostics</button>
   </div>
+  <div class="row">
+    <input id="fileInput" type="file" aria-label="File to send to the calculator">
+    <button id="sendFile" class="alt" disabled>Send file to calculator</button>
+  </div>
+  <div class="row">
+    <input id="apiKey" type="password" placeholder="Gemini API key" aria-label="Gemini API key" autocomplete="off">
+    <input id="model" value="gemini-2.5-flash" aria-label="Gemini model name">
+  </div>
+  <div class="row"><button id="bridge" disabled>Start bridge</button></div>
   <div id="log" role="log" aria-live="polite"></div>
 </main>
 <script>
@@ -280,9 +289,61 @@ Nspire.prototype.writeFile = function (path, bytes) {
   });
 };
 
+Nspire.prototype.deleteFile = function (path) {
+  return this.with(0x4060, async () => {
+    await this.dataWrite(buildPath([0x09, 0x01], path, [0]));
+    const r = await this.dataRead();
+    if (((r[0] << 8) | r[1]) !== 0xFF00) throw new Error('delete failed (' + hex(r, 4) + ')');
+  });
+};
+const PROMPT = '/gemprompt.txt.tns', REPLY = '/gemreply.txt.tns';
+let bridgeOn = false;
+try { $('apiKey').value = localStorage.getItem('gemKey') || ''; } catch (e) {}
+async function askGemini(prompt) {
+  const key = $('apiKey').value.trim(), model = $('model').value.trim();
+  try { localStorage.setItem('gemKey', key); } catch (e) {}
+  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(key), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: 'You answer for a small calculator screen. Reply in plain ASCII text only, no markdown, no lists with symbols, at most 600 characters.' }] },
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 500 }
+    })
+  });
+  const j = await res.json();
+  if (!res.ok) throw new Error('Gemini: ' + ((j.error && j.error.message) || res.status));
+  const text = ((j.candidates || [])[0]?.content?.parts || []).map(p => p.text || '').join('');
+  return (text || 'No answer.').replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[*#`]/g, '').replace(/[^\x20-\x7E\n]/g, '?').slice(0, 1500);
+}
+async function bridgeLoop() {
+  while (bridgeOn && nsp) {
+    try {
+      let bytes = null;
+      try { bytes = await nsp.readFile(PROMPT); } catch (e) { if (!/not found/.test(e.message)) throw e; }
+      if (bytes) {
+        const prompt = dec.decode(bytes).trim();
+        await nsp.deleteFile(PROMPT);
+        if (prompt) {
+          log('Prompt: ' + prompt);
+          const ans = await askGemini(prompt);
+          try { await nsp.deleteFile(REPLY); } catch (e) {}
+          await nsp.writeFile(REPLY, enc.encode(ans));
+          log('Answer sent (' + ans.length + ' characters)', 'ok');
+        }
+      }
+    } catch (e) { log('Bridge error: ' + e.message, 'bad'); if (nsp) nsp.connected = false; await sleep(3000); }
+    await sleep(1500);
+  }
+}
+$('bridge').onclick = () => {
+  bridgeOn = !bridgeOn;
+  $('bridge').textContent = bridgeOn ? 'Stop bridge' : 'Start bridge';
+  if (bridgeOn) { if (!$('apiKey').value.trim()) { log('Enter your Gemini API key first', 'bad'); bridgeOn = false; $('bridge').textContent = 'Start bridge'; return; } log('Bridge running. Waiting for a prompt from the calculator...', 'ok'); bridgeLoop(); }
+  else log('Bridge stopped');
+};
 // ---- UI ----
 let usbDev = null, nsp = null;
-const needsLink = ['info', 'list', 'read', 'write', 'diag', 'disconnect'];
+const needsLink = ['info', 'list', 'read', 'write', 'diag', 'bridge', 'sendFile', 'disconnect'];
 function enable(on) { needsLink.forEach(id => { $(id).disabled = !on; }); }
 async function guard(label, fn) {
   try { return await fn(); }
@@ -340,7 +401,18 @@ $('diag').onclick = () => guard('Diagnostics', async () => {
   }
   log('--- diagnostics done.', 'ok');
 });
+$('sendFile').onclick = () => guard('Send file', async () => {
+  if (bridgeOn) { log('Stop the bridge before sending a file', 'bad'); return; }
+  const f = $('fileInput').files[0];
+  if (!f) { log('Choose a file first', 'bad'); return; }
+  const bytes = new Uint8Array(await f.arrayBuffer()), path = '/' + f.name;
+  log('Sending ' + f.name + ' (' + bytes.length + ' bytes). This can take a few seconds...');
+  try { await nsp.deleteFile(path); } catch (e) { nsp.connected = false; }
+  await nsp.writeFile(path, bytes);
+  log('Sent to ' + path + '. Find it in the calculator\'s Documents screen.', 'ok');
+});
 $('disconnect').onclick = async () => {
+  bridgeOn = false; $('bridge').textContent = 'Start bridge';
   try { await usbDev.close(); } catch (e) {}
   usbDev = nsp = null; enable(false); setStatus('Not connected'); log('Disconnected');
 };
