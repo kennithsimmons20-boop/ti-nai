@@ -107,6 +107,12 @@ class Nspire {
     traceOn && log(tstamp() + ' OUT ' + hex(out, 40), '');
     const r = await this.dev.transferOut(1, out);
     if (r.status !== 'ok') throw new Error('transferOut ' + r.status);
+    // A transfer that is an exact multiple of the 64-byte packet size must end with an empty packet.
+    if (out.length % 64 === 0) {
+      traceOn && log(tstamp() + ' OUT (empty packet to end the transfer)', '');
+      const z = await this.dev.transferOut(1, new Uint8Array(0));
+      if (z.status !== 'ok') throw new Error('transferOut (end) ' + z.status);
+    }
   }
   async recvPacket(timeoutMs = 10000) {
     if (!this.pending) {
@@ -318,8 +324,8 @@ $('write').onclick = () => guard('Write file', async () => {
 });
 $('diag').onclick = () => guard('Diagnostics', async () => {
   const tests = [
-    ['/ndless/nsp8.tns', 'hello', false],
-    ['/nsp9.tns', 'x'.repeat(300), true]
+    ['/nsp10.tns', 'x'.repeat(300), true],
+    ['/nsp11.tns', 'abcdefghij'.repeat(100), false]
   ];
   for (const [path, text, trace] of tests) {
     log('--- writing ' + path + ' (' + text.length + ' bytes)');
