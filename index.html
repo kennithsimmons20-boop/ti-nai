@@ -65,6 +65,8 @@ const hex = (b, n = 64) => Array.from(b.slice(0, n), x => x.toString(16).padStar
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 function setStatus(t, cls) { const s = $('status'); s.textContent = t; s.className = cls || ''; }
 const enc = new TextEncoder(), dec = new TextDecoder();
+let traceOn = false; const t0 = performance.now();
+const tstamp = () => '[' + ((performance.now() - t0) / 1000).toFixed(2) + 's]';
 
 // ---- Packet layer (ported from libnspire packet.c) ----
 function dataChecksum(bytes) {
@@ -102,7 +104,7 @@ class Nspire {
     let s = 0; for (let i = 0; i < 15; i++) s = (s + out[i]) & 0xFF;
     out[15] = s;
     out.set(data, 16);
-    this.trace && log('OUT ' + hex(out), '');
+    traceOn && log(tstamp() + ' OUT ' + hex(out, 40), '');
     const r = await this.dev.transferOut(1, out);
     if (r.status !== 'ok') throw new Error('transferOut ' + r.status);
   }
@@ -120,7 +122,7 @@ class Nspire {
     clearTimeout(timer);
     if (r.status !== 'ok') throw new Error('transferIn ' + r.status);
     const b = new Uint8Array(r.data.buffer, r.data.byteOffset, r.data.byteLength);
-    this.trace && log('IN  ' + hex(b), '');
+    traceOn && log(tstamp() + ' IN  ' + hex(b, 40), '');
     if (b.length < 16) throw new Error('short packet (' + b.length + ' bytes)');
     const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
     if (v.getUint16(0) !== 0x54FD) throw new Error('bad magic');
@@ -167,7 +169,7 @@ class Nspire {
   }
   // ---- Services (ported from service.c) ----
   serviceConnect(sid) {
-    if (this.connected) throw new Error('service busy');
+    if (this.connected) { log('previous transfer did not finish cleanly; reload the page if the next step fails', 'bad'); this.connected = false; }
     this.connected = true; this.devSid = sid;
   }
   async serviceDisconnect() {
@@ -316,21 +318,21 @@ $('write').onclick = () => guard('Write file', async () => {
 });
 $('diag').onclick = () => guard('Diagnostics', async () => {
   const tests = [
-    ['/nsp6.tns', 'hello'],
-    ['/nsp7.txt.tns', 'x'.repeat(300)],
-    ['/ndless/nsp8.tns', 'hello']
+    ['/ndless/nsp8.tns', 'hello', false],
+    ['/nsp9.tns', 'x'.repeat(300), true]
   ];
-  for (const [path, text] of tests) {
+  for (const [path, text, trace] of tests) {
     log('--- writing ' + path + ' (' + text.length + ' bytes)');
+    traceOn = trace;
     let failed = false;
     try { await nsp.writeFile(path, enc.encode(text)); log('upload confirmed', 'ok'); }
     catch (e) { log('write result: ' + e.message, 'bad'); failed = true; }
-    if (failed && /timeout/.test(log.last || '')) break;
-    try { const back = await nsp.readFile(path); log('read back ' + back.length + ' bytes: ' + dec.decode(back).slice(0, 20), 'ok'); }
-    catch (e) { log('read-back: ' + e.message, 'bad'); failed = true; }
-    if (failed) { nsp.connected = false; log('Stopping here. Reload the page and reconnect before trying again.', 'bad'); break; }
+    traceOn = false;
+    if (failed) { log('Stopping here. Reload the page and reconnect before trying again.', 'bad'); break; }
+    try { const back = await nsp.readFile(path); log('read back ' + back.length + ' bytes', 'ok'); }
+    catch (e) { log('read-back: ' + e.message, 'bad'); break; }
   }
-  log('--- diagnostics done. Look on the calculator for files starting with nsp.', 'ok');
+  log('--- diagnostics done.', 'ok');
 });
 $('disconnect').onclick = async () => {
   try { await usbDev.close(); } catch (e) {}
