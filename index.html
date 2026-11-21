@@ -401,7 +401,9 @@ async function askGemini(prompt) {
 }
 async function bridgeLoop() {
   const myId = ++loopId;
+  let polls = 0;
   while (bridgeOn && nsp && myId === loopId) {
+    if (++polls % 10 === 0) log('Still watching for a prompt (' + polls + ' checks)');
     try {
       let bytes = null;
       try { bytes = await nsp.readFile(PROMPT); } catch (e) { if (!/not found/.test(e.message)) throw e; }
@@ -411,11 +413,11 @@ async function bridgeLoop() {
         if (prompt) {
           log('Prompt: ' + prompt);
           const ans = await askGemini(prompt);
-          try { await saveNotes('Q: ' + prompt + '\n\nA: ' + ans); log('Notes document updated', 'ok'); }
-          catch (e) { log('Notes document failed: ' + e.message, 'bad'); nsp.connected = false; }
           try { await nsp.deleteFile(REPLY); } catch (e) { nsp.connected = false; }
           await nsp.writeFile(REPLY, enc.encode(ans.length + '\n' + ans));
-          log('Answer sent (' + ans.length + ' characters)', 'ok');
+          log('Answer sent (' + ans.length + ' characters). Choose Check on the calculator.', 'ok');
+          try { await saveNotes('Q: ' + prompt + '\n\nA: ' + ans); log('Notes document updated', 'ok'); }
+          catch (e) { log('Notes document failed: ' + e.message, 'bad'); nsp.connected = false; }
         }
       }
     } catch (e) { log('Bridge error: ' + e.message, 'bad'); if (nsp) nsp.connected = false; await sleep(3000); }
