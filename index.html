@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nspire Gemini bridge</title>
+<title>TI-NAI</title>
 <style>
   :root { --bg:#f6f7f4; --fg:#1d2320; --muted:#5d6762; --line:#cfd5d0; --ok:#16794a; --bad:#b3261e; --btn:#1d2320; --btnfg:#f6f7f4; --log:#ecefe9; }
   @media (prefers-color-scheme: dark) {
@@ -27,7 +27,7 @@
 </head>
 <body>
 <main>
-  <h1>Nspire Gemini bridge</h1>
+  <h1>TI-NAI</h1>
   <p>Plug in the calculator, turn it on, and stay on the home screen. Connect first, then try the other buttons one at a time.</p>
   <p id="status">Not connected</p>
   <div class="row">
@@ -56,7 +56,7 @@
   </div>
   <div class="row">
     <input id="apiKey" type="password" placeholder="Gemini API key" aria-label="Gemini API key" autocomplete="off">
-    <input id="model" value="gemini-2.5-flash" aria-label="Gemini model name">
+    <input id="model" value="gemini-3.5-flash-lite" aria-label="Gemini model name">
   </div>
   <div class="row"><button id="bridge" disabled>Start bridge</button>
     <button id="testNotes" class="alt" disabled>Write test notes document</button></div>
@@ -422,11 +422,11 @@ async function bridgeLoop() {
         if (prompt && !skip) {
           log('Prompt: ' + prompt);
           const ans = await askGemini(prompt);
+          try { await saveNotes('Q: ' + prompt + '\n\nA: ' + ans); log('Notes document updated', 'ok'); }
+          catch (e) { log('Notes document failed: ' + e.message, 'bad'); nsp.connected = false; }
           try { await nsp.deleteFile(REPLY); } catch (e) { nsp.connected = false; }
           await nsp.writeFile(REPLY, enc.encode(ans.length + '\n' + ans));
           log('Answer sent (' + ans.length + ' characters). Choose Check on the calculator.', 'ok');
-          try { await saveNotes('Q: ' + prompt + '\n\nA: ' + ans); log('Notes document updated', 'ok'); }
-          catch (e) { log('Notes document failed: ' + e.message, 'bad'); nsp.connected = false; }
         }
       }
     } catch (e) { log('Bridge error: ' + e.message, 'bad'); if (nsp) nsp.connected = false; await sleep(3000); }
