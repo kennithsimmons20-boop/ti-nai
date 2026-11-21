@@ -43,6 +43,7 @@
   <div class="row">
     <input id="filePath" value="/reply.txt.tns" aria-label="File path" spellcheck="false">
     <button id="read" class="alt" disabled>Read file</button>
+    <button id="download" class="alt" disabled>Download file</button>
   </div>
   <div class="row">
     <input id="fileText" value="hello from the Chromebook" aria-label="Text to write" spellcheck="false">
@@ -362,13 +363,21 @@ async function rawDeflate(bytes){
   return new Uint8Array(await new Response(cs.readable).arrayBuffer());
 }
 const TNS_PROB_HEADER=Uint8Array.from([0x0F,0xCE,0xD8,0xD2,0x81,0x06,0x86,0x5B,0x99,0xDD,0xA2,0x3D,0xD9,0xE9,0x4B,0xD4,0x31,0xBB,0x50,0xB6,0x4D,0xB3,0x29,0x24,0x70,0x60,0x49,0x38,0x1C,0x30,0xF8,0x99,0x00,0x4B,0x92,0x64,0xE4,0x58,0xE6,0xBC]);
-function tnsNotesXml(text){
+function tnsNotesXml(text,variant){
   const esc=t=>t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const paras=text.replace(/\r/g,'').split('\n').map(l=>'<node name="1para"><node name="1rtline"><leaf name="1word">'+esc(l)+'</leaf></node></node>').join('');
+  const leaf=(t,extra)=>'<leaf name="1word">'+esc(t)+(extra||'')+'</leaf>';
+  let first=true;
+  const paras=text.replace(/\r/g,'').split('\n').map(l=>{
+    let leaves;
+    if(variant==='C'){const w=l.split(' ').filter(Boolean);leaves=(w.length?w:['']).map(x=>leaf(x)).join('');}
+    else leaves=leaf(l,(variant==='B'&&first)?'<cursor index="0"></cursor>':'');
+    first=false;
+    return '<node name="1para"><node name="1rtline">'+leaves+'</node></node>';
+  }).join('');
   return '<?xml version="1.0" encoding="UTF-8" standalone="no" ?><prob xmlns="urn:TI.Problem" ver="1.0" pbname=""><sym></sym><card clay="0" h1="10000" h2="10000" w1="10000" w2="10000"><isDummyCard>0</isDummyCard><flag>0</flag><wdgt xmlns:np="urn:TI.Notepad" type="TI.Notepad" ver="2.0"><np:mFlags>1024</np:mFlags><np:value>3</np:value><np:fmtxt><r2dtotree><node name="1doc">'+paras+'</node></r2dtotree></np:fmtxt></wdgt></card></prob>';
 }
-async function makeNotesTns(text){
-  const comp=tnsXmlCompress(tnsNotesXml(text)),bytes=Uint8Array.from(comp,ch=>ch.charCodeAt(0));
+async function makeNotesTns(text,variant){
+  const comp=tnsXmlCompress(tnsNotesXml(text,variant)),bytes=Uint8Array.from(comp,ch=>ch.charCodeAt(0));
   const enc=tnsCrypt(await rawDeflate(bytes)),prob=new Uint8Array(TNS_PROB_HEADER.length+enc.length);
   prob.set(TNS_PROB_HEADER);prob.set(enc,TNS_PROB_HEADER.length);
   const doc=Uint8Array.from(atob(TNS_DOC_B64),ch=>ch.charCodeAt(0));
@@ -376,10 +385,10 @@ async function makeNotesTns(text){
 }
 
 const PROMPT = '/gemprompt.txt.tns', REPLY = '/gemreply.txt.tns', NOTES = '/Gemini answer.tns';
-async function saveNotes(text) {
-  const doc = await makeNotesTns(text);
-  try { await nsp.deleteFile(NOTES); } catch (e) { nsp.connected = false; }
-  await nsp.writeFile(NOTES, doc);
+async function saveNotes(text, name, variant) {
+  const doc = await makeNotesTns(text, variant), path = name || NOTES;
+  try { await nsp.deleteFile(path); } catch (e) { nsp.connected = false; }
+  await nsp.writeFile(path, doc);
 }
 let bridgeOn = false, loopId = 0;
 try { $('apiKey').value = localStorage.getItem('gemKey') || ''; } catch (e) {}
@@ -434,7 +443,7 @@ $('bridge').onclick = () => {
 };
 // ---- UI ----
 let usbDev = null, nsp = null;
-const needsLink = ['info', 'list', 'read', 'write', 'diag', 'bridge', 'testNotes', 'sendFile', 'disconnect'];
+const needsLink = ['info', 'list', 'read', 'write', 'diag', 'bridge', 'testNotes', 'download', 'sendFile', 'disconnect'];
 function enable(on) { needsLink.forEach(id => { $(id).disabled = !on; }); }
 async function guard(label, fn) {
   try { return await fn(); }
@@ -494,8 +503,20 @@ $('diag').onclick = () => guard('Diagnostics', async () => {
 });
 $('testNotes').onclick = () => guard('Test notes', async () => {
   if (bridgeOn) { log('Stop the bridge first', 'bad'); return; }
-  await saveNotes('Q: test question\n\nA: If you can read this in the Notes app, the document format works.');
-  log('Wrote ' + NOTES + '. Open it from the calculator Documents screen.', 'ok');
+  for (const v of ['A', 'B', 'C']) {
+    await saveNotes('Q: test question\n\nA: Hello world from Gemini', '/Notes test ' + v + '.tns', v);
+    log('Wrote /Notes test ' + v + '.tns', 'ok');
+  }
+  log('Open Notes test A, B and C from Documents and tell me which ones show text.');
+});
+$('download').onclick = () => guard('Download', async () => {
+  if (bridgeOn) { log('Stop the bridge first', 'bad'); return; }
+  const path = $('filePath').value.trim(), bytes = await nsp.readFile(path);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  a.download = path.split('/').pop() || 'file.tns';
+  document.body.appendChild(a); a.click(); a.remove();
+  log('Downloaded ' + a.download + ' (' + bytes.length + ' bytes)', 'ok');
 });
 $('sendFile').onclick = () => guard('Send file', async () => {
   if (bridgeOn) { log('Stop the bridge before sending a file', 'bad'); return; }
