@@ -401,16 +401,18 @@ async function askGemini(prompt) {
 }
 async function bridgeLoop() {
   const myId = ++loopId;
-  let polls = 0;
+  let polls = 0, staleKey = null;
   while (bridgeOn && nsp && myId === loopId) {
     if (++polls % 10 === 0) log('Still watching for a prompt (' + polls + ' checks)');
     try {
       let bytes = null;
       try { bytes = await nsp.readFile(PROMPT); } catch (e) { if (!/not found/.test(e.message)) throw e; }
+      if (!bytes) staleKey = null;
       if (bytes) {
         const prompt = dec.decode(bytes).trim();
-        await nsp.deleteFile(PROMPT);
-        if (prompt) {
+        const skip = prompt === staleKey;
+        if (!skip) { try { await nsp.deleteFile(PROMPT); } catch (e) { log('Could not delete the prompt file (' + e.message + '), carrying on'); nsp.connected = false; staleKey = prompt; } }
+        if (prompt && !skip) {
           log('Prompt: ' + prompt);
           const ans = await askGemini(prompt);
           try { await nsp.deleteFile(REPLY); } catch (e) { nsp.connected = false; }
